@@ -21,6 +21,14 @@
 		Notified(notification)       { title, message, changes? } for toasts
 		TeleportRequested(destinationId)
 		InventoryChanged()           items collected or equipped/unequipped
+		TimeChanged(minutes)         the in-game time moved forward
+		ActivityPerformed(activityId, resolved)
+
+	Time of day (Game/Clock) only moves forward. It starts at the day plan's
+	`startTime` and advances when a scenario opens (to at least its
+	`timeOfDay`), when an activity takes time (`minutes`), on first entry
+	to some zones (`entryMinutes`) and when arriving in an area
+	(Data/Areas `arrivals`).
 
 	This module has no UI or client-only dependencies, so the same controller
 	could later run on the server if the game needs authoritative state.
@@ -34,9 +42,11 @@ local Inspectables = require(Shared.Data.Inspectables)
 local Items = require(Shared.Data.Items)
 local Zones = require(Shared.Data.Zones)
 local DayPlans = require(Shared.Data.DayPlans)
+local Areas = require(Shared.Data.Areas)
 local World = require(Shared.Constants.World)
 local GameState = require(Shared.State.GameState)
 local Signal = require(Shared.Util.Signal)
+local Clock = require(script.Parent.Clock)
 local Conditions = require(script.Parent.Conditions)
 local Objectives = require(script.Parent.Objectives)
 local Reflection = require(script.Parent.Reflection)
@@ -66,6 +76,8 @@ function GameController.new()
 		Notified = Signal.new(),
 		TeleportRequested = Signal.new(),
 		InventoryChanged = Signal.new(),
+		TimeChanged = Signal.new(),
+		ActivityPerformed = Signal.new(),
 
 		_phase = Phase.CharacterSelect,
 		_character = nil,
@@ -122,6 +134,41 @@ function GameController:_markArea(areaId: string)
 	self._state:setFlags({ [`visited:{areaId}`] = true })
 end
 
+-- Moves the clock to `minutes` if that's later than now.
+function GameController:_setTime(minutes: number?)
+	if minutes and self._state and self._state:setTime(minutes) then
+		self.TimeChanged:Fire(minutes)
+	end
+end
+
+function GameController:_advanceTime(minutes: number?)
+	local now = self._state and self._state:getTime()
+	if now and type(minutes) == "number" and minutes > 0 then
+		self:_setTime(now + minutes)
+	end
+end
+
+-- Time rules for arriving in an area (Data/Areas `arrivals`). Each rule
+-- applies at most once per day, the first time its condition holds.
+function GameController:_applyArrivals(areaId: string)
+	local area = Areas[areaId]
+	local state = self._state
+	if not area or not area.arrivals then
+		return
+	end
+	for index, rule in area.arrivals do
+		local key = `arrival:{areaId}:{index}`
+		if state:getCounter(key) == 0 and Conditions.evaluate(rule.when, state) then
+			state:incrementCounter(key)
+			self:_advanceTime(rule.minutes)
+			self:_setTime(Clock.parse(rule.atLeast))
+			if rule.message then
+				self.Notified:Fire({ title = Clock.format(state:getTime()), message = rule.message })
+			end
+		end
+	end
+end
+
 function GameController:_resolve(entry)
 	return Rules.resolve(entry, self._character.id, self._state)
 end
@@ -140,8 +187,28 @@ function GameController:_findScenarioAt(locationId: string)
 end
 
 function GameController:_isActivityAvailable(activity): boolean
-	local uses = self._state:getCounter(`activity:{activity.id}`)
-	return uses < (activity.maxUses or 1) and Conditions.evaluate(activity.requires, self._state)
+	local state = self._state
+	local uses = state:getCounter(`activity:{activity.id}`)
+	if uses >= (activity.maxUses or 1) then
+		return false
+	end
+	-- Activities in a group share a limit ("pack 2 of these 3 things").
+	if activity.group and activity.groupLimit and state:getCounter(`group:{activity.group}`) >= activity.groupLimit then
+		return false
+	end
+	return Conditions.evaluate(activity.requires, state)
+end
+
+-- How many different inspectables have been looked at this run.
+function GameController:_countNoticed(): (number, number)
+	local noticed, total = 0, 0
+	for inspectableId in Inspectables do
+		total += 1
+		if self._state and self._state:getCounter(`noticed:{inspectableId}`) > 0 then
+			noticed += 1
+		end
+	end
+	return noticed, total
 end
 
 function GameController:_isExploring(): boolean
@@ -175,6 +242,8 @@ function GameController:selectCharacter(characterId: string): boolean
 	self._character = character
 	self._state = GameState.new(character)
 	self._dayPlan = plan
+	self._state:setTime(Clock.parse(plan.startTime) or Clock.parse("7:00 AM") :: number)
+	self.TimeChanged:Fire(self._state:getTime())
 	self:_markArea(plan.startArea)
 	self._lastObjective = Objectives.getCurrent(plan, self._state)
 
@@ -190,6 +259,7 @@ function GameController:arriveAt(areaId: string): boolean
 		return false
 	end
 	self:_markArea(areaId)
+	self:_applyArrivals(areaId)
 	self:_stateChanged()
 	return true
 end
@@ -256,6 +326,9 @@ function GameController:getInteraction(interactionType: string, interactionId: s
 		end
 	elseif interactionType == InteractionType.Sit then
 		info.available = true
+	elseif interactionType == InteractionType.Door or interactionType == InteractionType.Signal then
+		-- World-only interactions (client Doors, Crosswalks).
+		info.available = true
 	end
 	return info
 end
@@ -284,6 +357,7 @@ function GameController:startScenarioAt(locationId: string): boolean
 		return false
 	end
 	self._activeScenario = scenario
+	self:_setTime(Clock.parse(scenario.timeOfDay))
 	self:_setPhase(Phase.Scenario)
 	return true
 end
@@ -330,6 +404,8 @@ function GameController:submitChoice(choiceId: string): boolean
 	self._activeScenario = nil
 	self._lastResult = {
 		kind = "scenario",
+		scenarioId = scenario.id,
+		choiceId = choice.id,
 		title = scenario.title,
 		heading = choice.text,
 		feedback = choice.feedback,
@@ -352,8 +428,15 @@ function GameController:performActivity(activityId: string): boolean
 	local state = self._state
 	local resolved = self:_resolve(activity)
 	state:incrementCounter(`activity:{activity.id}`)
+	local groupFull = false
+	if activity.group then
+		local used = state:incrementCounter(`group:{activity.group}`)
+		groupFull = activity.groupLimit ~= nil and used >= activity.groupLimit
+	end
 	local changes = self:_applyEffects(resolved.effects, { kind = "activity", id = activity.id, title = resolved.title })
 	state:setFlags(resolved.setFlags)
+	self:_advanceTime(resolved.minutes)
+	self.ActivityPerformed:Fire(activity.id, resolved)
 	state:recordEvent({
 		kind = "activity",
 		id = activity.id,
@@ -364,12 +447,16 @@ function GameController:performActivity(activityId: string): boolean
 	if resolved.presentation == "toast" then
 		-- Small moments: a notification, and the player keeps exploring.
 		self.Notified:Fire({ title = resolved.title, message = resolved.feedback, changes = changes })
+		if groupFull and resolved.groupFullMessage then
+			self.Notified:Fire({ title = resolved.groupTitle or resolved.title, message = resolved.groupFullMessage })
+		end
 		self:_stateChanged()
 		return true
 	end
 
 	self._lastResult = {
 		kind = "activity",
+		activityId = activity.id,
 		title = resolved.title,
 		heading = resolved.resultText,
 		feedback = resolved.feedback,
@@ -380,13 +467,24 @@ function GameController:performActivity(activityId: string): boolean
 	return true
 end
 
--- Shows a short note about a world detail. Never changes meters.
+-- Shows a short note about a world detail. Never changes meters. The first
+-- look at each detail counts toward "details noticed" (an optional
+-- exploration reward shown on the results screen).
 function GameController:inspect(inspectableId: string): boolean
 	local inspectable = Inspectables[inspectableId]
 	if not self:_isExploring() or not inspectable then
 		return false
 	end
-	self.Notified:Fire({ title = inspectable.title, message = inspectable.text })
+	local firstLook = self._state:incrementCounter(`noticed:{inspectableId}`) == 1
+	local footer = nil
+	if firstLook then
+		local noticed, total = self:_countNoticed()
+		footer = `Details noticed: {noticed} of {total}`
+	end
+	self.Notified:Fire({ title = inspectable.title, message = inspectable.text, footer = footer })
+	if firstLook then
+		self:_stateChanged()
+	end
 	return true
 end
 
@@ -512,6 +610,7 @@ function GameController:enterZone(zoneId: string): boolean
 	state:incrementCounter(`zoneVisit:{zoneId}`)
 
 	local resolved = self:_resolve(zone)
+	self:_advanceTime(resolved.entryMinutes)
 	state:recordEvent({ kind = "zone", id = zone.id, title = zone.title, summary = resolved.eventSummary })
 	local changes = nil
 	if resolved.entryEffects then
@@ -562,6 +661,25 @@ function GameController:getArea(): string?
 	return if self._state then self._state.area else nil
 end
 
+-- In-game time as minutes since midnight (nil outside a run).
+function GameController:getTime(): number?
+	return if self._state then self._state:getTime() else nil
+end
+
+function GameController:getTimeText(): string?
+	local minutes = self:getTime()
+	return if minutes then Clock.format(minutes) else nil
+end
+
+-- A notification from the world layer (e.g. "This door is locked").
+function GameController:notify(notification)
+	self.Notified:Fire(notification)
+end
+
+function GameController:getFlag(flag: string): any
+	return if self._state then self._state:getFlag(flag) else nil
+end
+
 function GameController:getMeters()
 	return if self._state then self._state:getMeters() else nil
 end
@@ -574,8 +692,9 @@ function GameController:getObjectiveText(): string?
 end
 
 -- Target of the objective indicator for the current area, as
--- "InteractionType:InteractionId", or nil.
-function GameController:getObjectiveMarker(): string?
+-- "InteractionType:InteractionId" (or "Waypoint:<id>"), a list of them to
+-- follow in order (a route), or nil.
+function GameController:getObjectiveMarker(): any
 	if not self._state or not self._dayPlan then
 		return nil
 	end
@@ -607,6 +726,8 @@ function GameController:getView()
 		area = state.area,
 		meters = state:getMeters(),
 		objective = self:getObjectiveText(),
+		time = state:getTime(),
+		timeText = self:getTimeText(),
 	}
 
 	if phase == Phase.Scenario then
@@ -619,6 +740,8 @@ function GameController:getView()
 		view.history = state:getHistory()
 		view.events = state:getEvents()
 		view.reflection = Reflection.build(self._character, startingMeters, view.meters)
+		local noticed, total = self:_countNoticed()
+		view.noticed = { count = noticed, total = total }
 	end
 
 	return view

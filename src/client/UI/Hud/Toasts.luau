@@ -49,7 +49,7 @@ function Toasts:_remove(item: CanvasGroup)
 	tween:Play()
 end
 
--- notification: { title: string?, message: string, changes: { MeterChange }? }
+-- notification: { title: string?, message: string, changes: { MeterChange }?, footer: string? }
 function Toasts:push(notification)
 	local ctx = self._ctx
 	local item = Components.create("CanvasGroup", {
@@ -66,6 +66,9 @@ function Toasts:push(notification)
 	end
 	Components.text(panel, ctx, notification.message, { size = "Body" })
 	Components.changeChips(panel, ctx, notification.changes)
+	if notification.footer then
+		Components.text(panel, ctx, notification.footer, { size = "Caption", color = Colors.TextMuted })
+	end
 
 	table.insert(self._items, item)
 	TweenService:Create(item, FADE, { GroupTransparency = 0 }):Play()

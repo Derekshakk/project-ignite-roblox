@@ -3,8 +3,9 @@
 
 	Small, comfortable game-feel touches for the player's own character:
 	- Footsteps: Roblox's default running sound, re-voiced per floor
-	  material (soft on carpet, warmer on wood, crisper on tile) with an
-	  equalizer and volume change. No new assets needed.
+	  material (soft on carpet and grass, warmer on wood, crisper on tile,
+	  concrete and asphalt) with an equalizer and volume change. No new
+	  assets needed.
 	- Landing: after a real fall (not a hop), the camera dips very slightly
 	  and recovers. Off when Settings "Camera motion" is off.
 	There is no camera shake or head bob.
@@ -26,6 +27,16 @@ local PROFILES = {
 	CeramicTiles = { volume = 0.95, HighGain = 2, MidGain = 0, LowGain = -1 },
 	Slate = { volume = 0.95, HighGain = 2, MidGain = 0, LowGain = -1 },
 	Marble = { volume = 0.95, HighGain = 2, MidGain = 0, LowGain = -1 },
+	-- Outdoors.
+	Grass = { volume = 0.4, HighGain = -12, MidGain = -3, LowGain = 1 },
+	LeafyGrass = { volume = 0.4, HighGain = -12, MidGain = -3, LowGain = 1 },
+	Ground = { volume = 0.55, HighGain = -8, MidGain = -1, LowGain = 2 },
+	Mud = { volume = 0.5, HighGain = -10, MidGain = -2, LowGain = 2 },
+	Pebble = { volume = 0.7, HighGain = -2, MidGain = 1, LowGain = 0 },
+	Concrete = { volume = 0.9, HighGain = 1, MidGain = 0, LowGain = -1 },
+	Pavement = { volume = 0.9, HighGain = 1, MidGain = 0, LowGain = -1 },
+	Asphalt = { volume = 0.85, HighGain = 0, MidGain = -1, LowGain = 0 },
+	Brick = { volume = 0.9, HighGain = 1, MidGain = 0, LowGain = -1 },
 }
 local DEFAULT_PROFILE = { volume = 0.85, HighGain = 0, MidGain = 0, LowGain = 0 }
 

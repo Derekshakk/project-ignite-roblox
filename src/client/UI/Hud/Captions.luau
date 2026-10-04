@@ -1,10 +1,13 @@
 --[[
 	Captions
 
-	Subtitles for spoken lines (teacher lectures, scenario intros), near the
-	bottom of the screen. Lines fade in and out; nothing flashes. Each
-	caption has a `source` so one scene can stop its own captions without
-	clearing another's. Hidden when Settings "Captions" is off.
+	Subtitles near the bottom of the screen. Spoken lines normally appear in
+	speech bubbles over the NPC (World/NpcSpeech); SceneDirector also shows
+	a line here when its speaker is off-screen, and clears it as soon as
+	the line ends or the scene moves on (so it can never sit on top of the
+	choice panel). Lines fade in and out; nothing flashes. Each caption has
+	a `source` so one scene can stop its own captions without clearing
+	another's. Hidden when Settings "Captions" is off.
 ]]
 
 local TweenService = game:GetService("TweenService")
@@ -33,6 +36,9 @@ function Captions.new(playerGui: PlayerGui)
 	group.BackgroundColor3 = Theme.Colors.Background
 	group.BackgroundTransparency = 0.2
 	group.GroupTransparency = 1
+	-- Hidden for real while no line is shown (not only faded out), so an
+	-- empty caption bar can never appear on screen.
+	group.Visible = false
 	group.Parent = gui
 	local constraint = Instance.new("UISizeConstraint")
 	constraint.MaxSize = Vector2.new(820, math.huge)
@@ -59,6 +65,7 @@ function Captions.new(playerGui: PlayerGui)
 		text.TextWrapped = true
 		text.TextXAlignment = Enum.TextXAlignment.Left
 		text.Font = font
+		text.Text = ""
 		text.TextColor3 = color
 		text.Parent = group
 		return text
@@ -95,27 +102,11 @@ function Captions:show(speakerName: string, text: string, seconds: number, sourc
 	self._line.TextSize = large
 	self._speaker.Text = string.upper(speakerName)
 	self._line.Text = text
+	self._group.Visible = true
 	TweenService:Create(self._group, FADE, { GroupTransparency = 0 }):Play()
 	task.delay(seconds, function()
 		if self._token == token then
 			self:_hide()
-		end
-	end)
-end
-
--- Plays lines one after another across `totalSeconds`.
-function Captions:playSequence(speakerName: string, lines: { string }, totalSeconds: number, source: string?)
-	self._token += 1
-	local token = self._token
-	local perLine = totalSeconds / math.max(#lines, 1)
-	task.spawn(function()
-		for _, text in lines do
-			if self._token ~= token then
-				return
-			end
-			self:show(speakerName, text, perLine, source)
-			token = self._token
-			task.wait(perLine)
 		end
 	end)
 end
@@ -131,7 +122,17 @@ end
 
 function Captions:_hide()
 	self._source = nil
-	TweenService:Create(self._group, FADE, { GroupTransparency = 1 }):Play()
+	local token = self._token
+	local tween = TweenService:Create(self._group, FADE, { GroupTransparency = 1 })
+	tween.Completed:Connect(function()
+		-- Only if no new line started while fading out.
+		if self._token == token then
+			self._group.Visible = false
+			self._speaker.Text = ""
+			self._line.Text = ""
+		end
+	end)
+	tween:Play()
 end
 
 return Captions

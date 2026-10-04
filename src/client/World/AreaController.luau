@@ -1,10 +1,12 @@
 --[[
 	AreaController
 
-	Works out which area (bedroom, hallway, classroom) the character is in
-	from the tagged area volumes, tells the GameController (which drives
-	ambience and the objective marker), and shows a short area title when
-	the player enters a new one.
+	Works out which area (bedroom, home, neighborhood, hallway, classroom)
+	the character is in from the tagged area volumes, tells the
+	GameController (which drives ambience, time and the objective marker),
+	and shows a short area title the first time the player enters each
+	area in a run. Volumes can overlap (the neighborhood surrounds the
+	buildings); the smallest one containing the player wins.
 ]]
 
 local CollectionService = game:GetService("CollectionService")
@@ -27,6 +29,7 @@ function AreaController.new(controller, transitions)
 		_transitions = transitions,
 		_volumes = {} :: { [BasePart]: string },
 		_current = nil :: string?,
+		_titled = {} :: { [string]: boolean },
 	}, AreaController)
 end
 
@@ -56,6 +59,7 @@ function AreaController:start()
 		-- Title card when a run starts, for wherever the character is.
 		if previousPhase == GameController.Phase.CharacterSelect and phase == GameController.Phase.Exploring then
 			self._current = nil
+			table.clear(self._titled)
 		end
 		previousPhase = phase
 	end)
@@ -77,18 +81,19 @@ function AreaController:_check()
 	if not position then
 		return
 	end
-	local found = nil
+	local found, smallest = nil, math.huge
 	for part, areaId in self._volumes do
-		if part.Parent and isInside(part, position) then
-			found = areaId
-			break
+		local size = part.Size.X * part.Size.Y * part.Size.Z
+		if size < smallest and part.Parent and isInside(part, position) then
+			found, smallest = areaId, size
 		end
 	end
 	if found and found ~= self._current then
 		self._current = found
 		self._controller:arriveAt(found)
 		local area = Areas[found]
-		if area then
+		if area and not self._titled[found] then
+			self._titled[found] = true
 			self._transitions:showAreaTitle(area.title)
 		end
 	end

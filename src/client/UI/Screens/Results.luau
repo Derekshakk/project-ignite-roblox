@@ -22,7 +22,8 @@ function Results.render(parent: Instance, ctx, view, actions): Instance
 	local page = content.Parent :: Instance
 
 	local header = Components.stack(content, ctx, { name = "Header", gap = Spacing.Small })
-	Components.text(header, ctx, `END OF DAY {view.day}`, { size = "Caption", font = "Bold", color = Colors.Accent })
+	local ended = if view.timeText then `  ·  {view.timeText}` else ""
+	Components.text(header, ctx, `END OF DAY {view.day}{ended}`, { size = "Caption", font = "Bold", color = Colors.Accent })
 	Components.text(header, ctx, `{character.name}'s Day`, { size = "Title", font = "Bold" })
 	Components.text(header, ctx, "Temporary results screen", { size = "Caption", color = Colors.TextMuted })
 
@@ -45,6 +46,14 @@ function Results.render(parent: Instance, ctx, view, actions): Instance
 		for _, event in view.events do
 			Components.text(momentsPanel, ctx, "•  " .. (event.summary or event.title), { color = Colors.TextMuted })
 		end
+	end
+
+	if view.noticed and view.noticed.total > 0 then
+		local noticedPanel = Components.panel(left, ctx, { name = "Noticed" })
+		Components.text(noticedPanel, ctx, "Exploring", { size = "Caption", font = "Bold", color = Colors.Accent })
+		Components.text(noticedPanel, ctx, `Details noticed along the way: {view.noticed.count} of {view.noticed.total}`, {
+			color = Colors.TextMuted,
+		})
 	end
 
 	local reflectionPanel = Components.panel(left, ctx, { name = "Reflection", color = Colors.PanelAlt })

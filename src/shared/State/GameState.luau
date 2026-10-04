@@ -2,7 +2,8 @@
 	GameState
 
 	Holds everything about one play session: which character, which day,
-	which area they are in, current meter values, the choices made so far,
+	which area they are in, the in-game time (minutes since midnight, see
+	Game/Clock), current meter values, the choices made so far,
 	other notable moments (activities, environments), usage counters, the
 	inventory (owned and equipped items), and story flags that later
 	scenarios can react to. It contains no UI code and
@@ -51,6 +52,7 @@ function GameState.new(character: any)
 		characterId = character.id,
 		day = 1,
 		area = nil :: string?,
+		_time = nil :: number?,
 		_startingMeters = startingMeters,
 		_meters = table.clone(startingMeters),
 		_history = {} :: { HistoryEntry },
@@ -184,6 +186,24 @@ function GameState:getEquipped(): { string }
 	end
 	table.sort(list)
 	return list
+end
+
+-- Time ----------------------------------------------------------------------
+
+function GameState:getTime(): number?
+	return self._time
+end
+
+-- Time only moves forward within a day. Returns true if it changed.
+function GameState:setTime(minutes: number): boolean
+	if type(minutes) ~= "number" or minutes ~= minutes then
+		return false
+	end
+	if self._time ~= nil and minutes <= self._time then
+		return false
+	end
+	self._time = minutes
+	return true
 end
 
 -- Flags ---------------------------------------------------------------------

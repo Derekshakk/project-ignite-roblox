@@ -359,15 +359,27 @@ end
 
 -- Decorative classroom door on a wall face, facing the reader, with a
 -- window, handle, frame and a room sign.
-function Props.classroomDoor(parent: Instance, cframe: CFrame, label: string)
+-- Another classroom's door, set into a wall: a locked door on the shared
+-- door system (trying it rattles the handle and says it's locked).
+function Props.classroomDoor(parent: Instance, cframe: CFrame, label: string, doorId: string)
 	local model = Builder.model(parent, "ClassroomDoor")
 	detail(model, "Frame", cframe * CFrame.new(0, 0.2, 0.02), Vector3.new(4.5, 8.3, 0.12), Colors.Trim)
-	detail(model, "Door", cframe * CFrame.new(0, 0, -0.06), Vector3.new(3.8, 7.7, 0.12), Colors.Door, { Material = Materials.Wood })
-	detail(model, "Window", cframe * CFrame.new(0.8, 1.4, -0.13), Vector3.new(0.8, 1.7, 0.04), Colors.Glass, {
+	local door = Builder.door(model, {
+		hinge = cframe * CFrame.new(1.9, 0, -0.06),
+		size = Vector3.new(3.8, 7.7, 0.12),
+		color = Colors.Door,
+		side = -1,
+		openAngle = -60,
+		doorId = doorId,
+		objectText = label,
+		locked = `{label} is locked. Your class is in Room 104, at the end of the hall.`,
+		solid = false,
+	})
+	Builder.attached(door, "Window", cframe * CFrame.new(0.8, 1.4, -0.13), Vector3.new(0.8, 1.7, 0.04), Colors.Glass, {
 		Material = Materials.Glass,
 		Transparency = 0.25,
 	})
-	detail(model, "Handle", cframe * CFrame.new(-1.45, -0.2, -0.16), Vector3.new(0.5, 0.12, 0.12), Colors.Metal, { Material = Materials.Metal })
+	Builder.attached(door, "Handle", cframe * CFrame.new(-1.45, -0.2, -0.16), Vector3.new(0.5, 0.12, 0.12), Colors.Metal, { Material = Materials.Metal })
 	Builder.sign(model, "RoomSign", cframe * CFrame.new(0, 4.75, -0.06), Vector3.new(2.6, 0.75, 0.08), label, Colors.Sign)
 	return model
 end

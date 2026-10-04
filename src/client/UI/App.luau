@@ -2,14 +2,17 @@
 	App
 
 	Owns the ScreenGui. Two layers:
-	- HUD layer: compact meter panel, objective tracker and toasts, shown
+	- HUD layer: compact meter panel, clock, objective tracker and toasts, shown
 	  while the character is in the world. Updated in place from controller
 	  signals; never covers the centre of the screen.
-	- Overlay layer: whatever the current phase needs on top of the world —
-	  nothing while exploring, a bottom dialog for scenarios and feedback,
-	  and full-screen pages only for character select and end-of-day results.
-	  Scenarios with a spoken intro (`leadInSeconds`) show their dialog after
-	  the speaker has finished, so the scene plays out first.
+	- Overlay layer: whatever the current phase and UIState stage need on
+	  top of the world — nothing while exploring, a small "Next" hint while
+	  an NPC is speaking, a bottom dialog for scenario choices and feedback,
+	  and full-screen pages only for character select and end-of-day
+	  results. The choice panel only appears once UIState reaches Choice
+	  (after the speaker has finished and their bubble is gone), so spoken
+	  lines and the panel never share the screen. Rendering is keyed, so
+	  repeated signals can't stack duplicate panels.
 	- Settings layer: the Settings button and panel.
 
 	Screens receive `actions`, a small table of functions that forward to the
@@ -23,17 +26,19 @@ local GameController = require(ReplicatedStorage:WaitForChild("Shared").Game.Gam
 local Theme = require(script.Parent.Theme)
 local MeterHud = require(script.Parent.Hud.MeterHud)
 local ObjectiveTracker = require(script.Parent.Hud.ObjectiveTracker)
+local ClockHud = require(script.Parent.Hud.ClockHud)
 local Toasts = require(script.Parent.Hud.Toasts)
 local SettingsPanel = require(script.Parent.Hud.SettingsPanel)
 
 local Phase = GameController.Phase
 local Screens = script.Parent.Screens
 
-local OVERLAY_BY_PHASE = {
-	[Phase.CharacterSelect] = require(Screens.CharacterSelect),
-	[Phase.Scenario] = require(Screens.ScenarioDialog),
-	[Phase.Feedback] = require(Screens.FeedbackDialog),
-	[Phase.Results] = require(Screens.Results),
+local OVERLAYS = {
+	CharacterSelect = require(Screens.CharacterSelect),
+	Speaking = require(Screens.SpeechHint),
+	Scenario = require(Screens.ScenarioDialog),
+	Feedback = require(Screens.FeedbackDialog),
+	Results = require(Screens.Results),
 }
 
 -- Phases where the character is in the world and the HUD is shown.
@@ -58,7 +63,7 @@ local function layer(parent: Instance, name: string, zIndex: number): Frame
 	return frame
 end
 
-function App.new(controller, playerGui: PlayerGui)
+function App.new(controller, playerGui: PlayerGui, uiState)
 	local screenGui = Instance.new("ScreenGui")
 	screenGui.Name = "ProjectIgniteUI"
 	screenGui.ResetOnSpawn = false
@@ -68,16 +73,21 @@ function App.new(controller, playerGui: PlayerGui)
 
 	local self = setmetatable({
 		_controller = controller,
+		_uiState = uiState,
 		_screenGui = screenGui,
 		_hudLayer = layer(screenGui, "Hud", 1),
 		_overlayLayer = layer(screenGui, "Overlay", 2),
 		_settingsLayer = layer(screenGui, "Settings", 3),
 		_settingsPanel = nil,
-		-- scenario id whose lead-in has already played in this opening
-		_introPlayed = nil :: string?,
-		_overlayToken = 0,
+		-- which overlay is shown, e.g. "Scenario#4" (name + phase serial)
+		_overlayKey = nil :: string?,
+		-- counts phase changes, so reopening the same kind of panel later
+		-- (a second feedback panel) always renders fresh
+		_phaseSerial = 0,
+		_lastPhase = nil :: string?,
 		_hud = nil,
 		_objective = nil,
+		_clock = nil,
 		_toasts = nil,
 		_overlay = nil,
 		_ctx = nil,
@@ -100,6 +110,9 @@ function App.new(controller, playerGui: PlayerGui)
 		end,
 		restart = function()
 			controller:restart()
+		end,
+		advanceDialogue = function()
+			uiState:requestAdvance()
 		end,
 	})
 
@@ -124,7 +137,7 @@ end
 ---------------------------------------------------------------------------
 
 function App:_destroyHud()
-	for _, key in { "_hud", "_objective", "_toasts" } do
+	for _, key in { "_hud", "_objective", "_clock", "_toasts" } do
 		if self[key] then
 			self[key]:destroy()
 			self[key] = nil
@@ -138,6 +151,8 @@ function App:_buildHud(view)
 	if HUD_PHASES[view.phase] then
 		self._hud = MeterHud.new(self._hudLayer, self._ctx, view.character, view.meters)
 		self._objective = ObjectiveTracker.new(self._hudLayer, self._ctx)
+		self._clock = ClockHud.new(self._hudLayer, self._ctx, view.day)
+		self._clock:set(view.timeText, false)
 		self:_syncIndicators()
 	end
 	self:_syncObjective()
@@ -178,30 +193,43 @@ end
 -- Overlay layer
 ---------------------------------------------------------------------------
 
-function App:_renderOverlay(view)
-	self._overlayToken += 1
+-- Which overlay the current phase and interaction stage call for.
+function App:_overlayName(phase: string): string?
+	local stage = self._uiState:getStage()
+	local Stage = self._uiState.Stage
+	if phase == Phase.CharacterSelect then
+		return "CharacterSelect"
+	elseif phase == Phase.Results then
+		return "Results"
+	elseif phase == Phase.Scenario then
+		-- Choices wait until the speaker has finished. (Any other stage
+		-- falls back to the choice panel so the player is never stuck.)
+		return if stage == Stage.Speaking then "Speaking" else "Scenario"
+	elseif phase == Phase.Feedback then
+		return "Feedback"
+	end
+	return nil -- exploring: nothing covers the world
+end
+
+-- Shows the overlay for the current state. Does nothing if it's already
+-- showing (unless `force`, e.g. after a layout change).
+function App:_renderOverlay(view, force: boolean?)
+	if view.phase ~= self._lastPhase then
+		self._lastPhase = view.phase
+		self._phaseSerial += 1
+	end
+	local name = self:_overlayName(view.phase)
+	local key = if name then `{name}#{self._phaseSerial}` else nil
+	if key == self._overlayKey and not force then
+		return
+	end
+	self._overlayKey = key
 	if self._overlay then
 		self._overlay:Destroy()
 		self._overlay = nil
 	end
-	if view.phase ~= Phase.Scenario then
-		self._introPlayed = nil
-	end
-	local screen = OVERLAY_BY_PHASE[view.phase]
+	local screen = name and OVERLAYS[name]
 	if not screen then
-		return -- exploring: nothing covers the world
-	end
-
-	-- Let a spoken intro play before the choices appear (once per opening).
-	local scenario = view.scenario
-	if view.phase == Phase.Scenario and scenario and scenario.leadInSeconds and self._introPlayed ~= scenario.id then
-		self._introPlayed = scenario.id
-		local token = self._overlayToken
-		task.delay(scenario.leadInSeconds, function()
-			if self._overlayToken == token and self._controller:getPhase() == Phase.Scenario then
-				self:_renderOverlay(self._controller:getView())
-			end
-		end)
 		return
 	end
 
@@ -230,7 +258,7 @@ function App:render()
 	self._ctx = self:_buildContext()
 	local view = self._controller:getView()
 	self:_buildHud(view)
-	self:_renderOverlay(view)
+	self:_renderOverlay(view, true)
 	if self._settingsPanel then
 		self._settingsPanel:destroy()
 	end
@@ -259,9 +287,17 @@ function App:start()
 	connect(controller.Changed, function()
 		self:_onPhaseChanged()
 	end)
+	connect(self._uiState.Changed, function()
+		self:_renderOverlay(controller:getView())
+	end)
 	connect(controller.MetersChanged, function(changes)
 		if self._hud then
 			self._hud:update(controller:getMeters(), changes)
+		end
+	end)
+	connect(controller.TimeChanged, function()
+		if self._clock then
+			self._clock:set(controller:getTimeText(), true)
 		end
 	end)
 	connect(controller.StateChanged, function()

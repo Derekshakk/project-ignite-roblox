@@ -29,7 +29,7 @@ local Materials = Palette.Materials
 
 local Builder = {}
 
-Builder.FLOOR_TOP = 0.2 -- floors sit just above the baseplate
+Builder.FLOOR_TOP = 0.2 -- floors sit just above the ground (y = 0)
 Builder.WALL_THICKNESS = 1
 
 local TRIM_DEPTH = 0.15
@@ -64,6 +64,123 @@ function Builder.part(parent: Instance, name: string, cframe: CFrame, size: Vect
 	end
 	part.Parent = parent
 	return part
+end
+
+-- A WedgePart: full height at the back (+Z), sloping down to the front
+-- (the CFrame's LookVector side).
+function Builder.wedge(parent: Instance, name: string, cframe: CFrame, size: Vector3, color: Color3, props: { [string]: any }?)
+	local part = Instance.new("WedgePart")
+	part.Name = name
+	part.Anchored = true
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = Materials.Matte
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	if props then
+		for key, value in props do
+			(part :: any)[key] = value
+		end
+	end
+	part.Parent = parent
+	return part
+end
+
+-- A stretched sphere filling `size` (bushes, canopies, hair, rounded
+-- caps). Rendered with a SpecialMesh, so it costs about the same as a
+-- block; collision (if any) is the box.
+function Builder.ellipsoid(parent: Instance, name: string, cframe: CFrame, size: Vector3, color: Color3, props: { [string]: any }?)
+	local part = Builder.part(parent, name, cframe, size, color, props)
+	local mesh = Instance.new("SpecialMesh")
+	mesh.MeshType = Enum.MeshType.Sphere
+	mesh.Parent = part
+	return part
+end
+
+--[[
+	A plank from point `a` to point `b` (world space): `width` runs
+	horizontally across it (or along `up`'s perpendicular), `thickness`
+	along its normal. Used for roof planes, rafters, railings and arms.
+]]
+function Builder.beam(parent: Instance, name: string, a: Vector3, b: Vector3, width: number, thickness: number, color: Color3, props: { [string]: any }?, up: Vector3?)
+	local frame = CFrame.lookAt((a + b) / 2, b, up or Vector3.yAxis)
+	return Builder.part(parent, name, frame, Vector3.new(width, thickness, (b - a).Magnitude), color, props)
+end
+
+--[[
+	A pitched (gable) roof. `base` is the centre of the top of the walls it
+	covers; the ridge runs along the base's local X, the slopes fall toward
+	its local ±Z. Options:
+		length, span: number    wall extents along X (ridge) and Z
+		rise: number            ridge height above the wall top
+		eave: number?           overhang past the walls along Z (default 1.2)
+		rake: number?           overhang past the gable ends (default 0.8)
+		thickness: number?      default 0.5
+		color: Color3, material: Enum.Material?
+		gableColor: Color3?     fill the triangles at both ends (wall colour)
+		gableEnds: { number }?  which ends to fill: 1 = +X, -1 = -X (default both)
+		trimColor: Color3?      rake boards along the sloped edges
+		gutterColor: Color3?    gutters along the eaves
+		gutterSides: { number }?  which eaves: 1 = +Z, -1 = -Z (default both)
+	Returns the model and the eave drop (how far below the wall top the
+	eave edge sits), for downspouts.
+]]
+function Builder.gableRoof(parent: Instance, base: CFrame, options: { [string]: any })
+	local model = Builder.model(parent, options.name or "Roof")
+	local length, span, rise = options.length, options.span, options.rise
+	local eave, rake = options.eave or 1.2, options.rake or 0.8
+	local thickness = options.thickness or 0.5
+	local material = options.material or Enum.Material.Slate
+	local half = span / 2
+	local slope = rise / half
+	local run = half + eave
+	local drop = eave * slope
+	local width = length + rake * 2
+
+	local ridge = base * Vector3.new(0, rise, 0)
+	for _, side in { 1, -1 } do
+		local eavePoint = base * Vector3.new(0, -drop, side * run)
+		local plane = Builder.beam(model, "RoofPlane", ridge, eavePoint, width, thickness, options.color, { Material = material }, base.UpVector)
+		-- Lift by half the thickness so the underside follows the pitch line.
+		plane.CFrame *= CFrame.new(0, thickness / 2, 0)
+		if options.gutterColor and table.find(options.gutterSides or { 1, -1 }, side) then
+			local gutter = Builder.detail(model, "Gutter", base * CFrame.new(0, -drop - 0.12, side * (run + 0.12)), Vector3.new(width, 0.42, 0.42), options.gutterColor, {
+				Shape = Enum.PartType.Cylinder,
+				Material = Materials.Metal,
+			})
+			gutter.CastShadow = false
+		end
+		if options.trimColor then
+			for _, endSide in { 1, -1 } do
+				local x = endSide * (width / 2 - 0.12)
+				local from = base * Vector3.new(x, rise + 0.05, 0)
+				local to = base * Vector3.new(x, -drop - 0.05, side * (run + 0.05))
+				Builder.beam(model, "RakeBoard", from, to, 0.28, thickness + 0.25, options.trimColor, { CanCollide = false, CastShadow = false }, base.UpVector)
+			end
+		end
+	end
+	-- Rounded ridge cap.
+	Builder.detail(model, "Ridge", base * CFrame.new(0, rise + thickness * 0.75, 0), Vector3.new(width + 0.1, 0.6, 0.6), (options.color :: Color3):Lerp(Color3.new(0, 0, 0), 0.15), {
+		Shape = Enum.PartType.Cylinder,
+		Material = material,
+	})
+
+	if options.gableColor then
+		for _, endSide in options.gableEnds or { 1, -1 } do
+			local x = endSide * (length / 2 - 0.3)
+			local size = Vector3.new(0.6, rise, half)
+			-- WedgeParts are tall at the back: turn each half so its tall
+			-- edge meets the ridge.
+			Builder.wedge(model, "Gable", base * CFrame.new(x, rise / 2, half / 2) * CFrame.Angles(0, math.pi, 0), size, options.gableColor, {
+				Material = options.gableMaterial or Materials.WoodPlanks,
+			})
+			Builder.wedge(model, "Gable", base * CFrame.new(x, rise / 2, -half / 2), size, options.gableColor, {
+				Material = options.gableMaterial or Materials.WoodPlanks,
+			})
+		end
+	end
+	return model, drop
 end
 
 -- Upright cylinder centred at `cframe` (legs, posts, bins, lamp stems).
@@ -517,6 +634,160 @@ function Builder.hingedLeaf(parent: Instance, name: string, hinge: CFrame, size:
 end
 
 -- Unanchored detail welded to a moving part (e.g. a handle on a door leaf).
+--[[
+	A door that uses the shared door system (client World/Doors): a hinged
+	leaf plus, by default, an "Open Door" prompt. Every door in the world
+	is built with this, so they all open, close, sound and behave the same.
+	Options:
+		name: string?
+		hinge: CFrame        on the hinge line; the leaf extends along the
+		                     hinge's local X toward `side`
+		size: Vector3        leaf size (X = width)
+		color: Color3, material: Enum.Material?
+		side: number         1 or -1
+		openAngle: number    degrees around the hinge's local Y; the sign
+		                     picks the swing direction (choose the side with
+		                     free space, so the door never swings into a wall)
+		doorId: string       used by prompts and objective markers
+		objectText: string?  prompt label, e.g. "Front door"
+		prompt: boolean?     default true (false for the second leaf of a pair)
+		group: string?       leaves in a group open and close together
+		autoClose: number?   seconds before closing again by itself
+		locked: string?      if set, the door is locked: trying it rattles it
+		                     and shows this message
+		solid: boolean?      collides while closed (default true)
+]]
+function Builder.door(parent: Instance, options: { [string]: any }): BasePart
+	local leaf = Builder.hingedLeaf(parent, options.name or "Door", options.hinge, options.size, options.color, options.side, options.openAngle, {
+		Material = options.material or Materials.Wood,
+	})
+	leaf.CanCollide = options.solid ~= false
+	leaf:SetAttribute(World.Attributes.DoorId, options.doorId)
+	if options.group then
+		leaf:SetAttribute(World.Attributes.DoorGroup, options.group)
+	end
+	if options.autoClose then
+		leaf:SetAttribute(World.Attributes.AutoClose, options.autoClose)
+	end
+	if options.locked then
+		leaf:SetAttribute(World.Attributes.Locked, true)
+		leaf:SetAttribute(World.Attributes.LockedMessage, options.locked)
+	end
+	CollectionService:AddTag(leaf, World.Tags.Door)
+	if options.prompt ~= false then
+		Builder.prompt(leaf, World.InteractionTypes.Door, options.doorId, {
+			ActionText = if options.locked then "Try Door" else "Open Door",
+			ObjectText = options.objectText or "",
+			MaxActivationDistance = 8,
+		}):SetAttribute(World.Attributes.Feedback, "none")
+	end
+	return leaf
+end
+
+-- The ReplicatedStorage folder ambient-life templates and route markers
+-- live in (see AmbientTemplates), created on first use.
+function Builder.ambientFolder(): Folder
+	local ReplicatedStorageService = game:GetService("ReplicatedStorage")
+	local folder = ReplicatedStorageService:FindFirstChild(World.AmbientFolder)
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = World.AmbientFolder
+		folder.Parent = ReplicatedStorageService
+	end
+	local markers = folder:FindFirstChild("Markers")
+	if not markers then
+		markers = Instance.new("Folder")
+		markers.Name = "Markers"
+		markers.Parent = folder
+	end
+	return folder :: Folder
+end
+
+--[[
+	A named point that ambient pedestrian routes (Data/Ambient) can use
+	instead of fixed coordinates, e.g. the foot of a neighbour's steps.
+	Stored as a Vector3 attribute in ReplicatedStorage so it is available
+	to the client regardless of streaming.
+]]
+function Builder.routeMarker(name: string, position: Vector3)
+	(Builder.ambientFolder():FindFirstChild("Markers") :: Instance):SetAttribute(name, position)
+end
+
+-- An invisible route point for the objective marker ("Waypoint:<id>").
+function Builder.waypoint(parent: Instance, waypointId: string, position: Vector3): Part
+	local part = volume(parent, `Waypoint_{waypointId}`, CFrame.new(position), Vector3.new(1, 1, 1))
+	part:SetAttribute(World.Attributes.WaypointId, waypointId)
+	CollectionService:AddTag(part, World.Tags.Waypoint)
+	return part
+end
+
+--[[
+	Exterior walls around a building, following its footprint: `points`
+	are the outer faces of the interior walls (Vector2 x/z, world space, in
+	order around the building). Each edge gets a wall just outside it, so
+	the inside of the rooms is untouched. Options:
+		color, material
+		height: number | { number }    per edge (index i = points[i]→points[i+1])
+		openings: { [edgeIndex]: { { at, width, top, bottom? } } }
+		                               `at` is the world x (or z) of the
+		                               opening's centre along that edge
+		windows: { [edgeIndex]: { { at, width, top, bottom } } }
+		                               decorative glass on the outer face
+]]
+function Builder.cladding(parent: Instance, points: { Vector2 }, options: { [string]: any })
+	local model = Builder.model(parent, options.name or "Exterior")
+	local count = #points
+	local area = 0
+	for i = 1, count do
+		local a, b = points[i], points[i % count + 1]
+		area += a.X * b.Y - b.X * a.Y
+	end
+	local thickness = Builder.WALL_THICKNESS
+	for i = 1, count do
+		local a, b = points[i], points[i % count + 1]
+		local direction = (b - a).Unit
+		local outward = if area > 0 then Vector2.new(direction.Y, -direction.X) else Vector2.new(-direction.Y, direction.X)
+		local mid = (a + b) / 2 + outward * thickness / 2
+		local along3 = Vector3.new(direction.X, 0, direction.Y)
+		local base = CFrame.fromMatrix(Vector3.new(mid.X, Builder.FLOOR_TOP, mid.Y), along3, Vector3.yAxis)
+		local height = if type(options.height) == "table" then options.height[i] else options.height
+		-- Where a world coordinate falls along this edge, from its centre.
+		local function alongOf(at: number): number
+			local point = if math.abs(direction.X) > 0.5 then Vector2.new(at, mid.Y) else Vector2.new(mid.X, at)
+			return (point - mid):Dot(direction)
+		end
+		local openings = {}
+		for _, opening in (options.openings and options.openings[i]) or {} do
+			table.insert(openings, {
+				center = alongOf(opening.at),
+				width = opening.width,
+				bottom = opening.bottom,
+				top = opening.top,
+				threshold = false,
+				frame = false,
+			})
+		end
+		Builder.wall(model, base, (b - a).Magnitude + thickness * 2, height, openings, {
+			color = options.color,
+			material = options.material,
+		})
+		for _, window in (options.windows and options.windows[i]) or {} do
+			local center = base * CFrame.new(alongOf(window.at), (window.bottom + window.top) / 2, 0)
+			local outwardOffset = CFrame.new(0, 0, 0)
+			-- base's local Z is along × up; flip so the glass sits on the outer face.
+			local zSign = if base.ZVector:Dot(Vector3.new(outward.X, 0, outward.Y)) > 0 then 1 else -1
+			outwardOffset = CFrame.new(0, 0, zSign * (thickness / 2 + 0.05))
+			local size = Vector3.new(window.width, window.top - window.bottom, 0.1)
+			Builder.detail(model, "WindowFrame", center * outwardOffset, size + Vector3.new(0.5, 0.5, -0.04), options.trimColor or Colors.OffWhite)
+			Builder.detail(model, "Window", center * outwardOffset * CFrame.new(0, 0, zSign * 0.04), size, Colors.Glass:Lerp(Colors.Charcoal, 0.45), {
+				Material = Materials.Glass,
+				Reflectance = 0.15,
+			})
+		end
+	end
+	return model
+end
+
 function Builder.attached(to: BasePart, name: string, cframe: CFrame, size: Vector3, color: Color3, props: { [string]: any }?)
 	local part = Builder.detail(to, name, cframe, size, color, props)
 	part.Anchored = false

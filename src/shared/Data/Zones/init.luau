@@ -13,6 +13,8 @@
 		tickSeconds: number                     default 2
 		maxTicks: number                        per day, default 1
 		walkSpeedMultiplier: number?            e.g. 0.65 in a crowd
+		entryMinutes: number?                   in-game time the first entry
+		                                        takes (e.g. the long way)
 		ambientSound: { soundId, volume }?      looping 3D sound at the zone
 		enterMessage, capMessage: string?       supportive notifications
 		eventSummary: string?                   line for the results screen

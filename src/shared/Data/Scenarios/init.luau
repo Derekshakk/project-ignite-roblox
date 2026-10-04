@@ -18,9 +18,16 @@
 		location: string?           world interaction point id
 		promptText: string?         interaction prompt label ("Check planner")
 		speaker: string?            NPC id (Data/Npcs) who talks to the player
-		introLines: { string }?     captions spoken before the choices appear
-		leadInSeconds: number?      how long the intro plays first
+		introLines: { string | { text: string, reaction: string? } }?
+		                            spoken (speech bubble) before the choices
+		                            appear; a reaction ("nod", "wave",
+		                            "point", "shrug") plays with that line
+		leadInSeconds: number?      minimum time the intro plays for
+		crowdReaction: "chat"?      nearby NPCs turn to each other and talk
+		                            while the choices are open
 		title, timeOfDay, situation, innerThoughts: string
+		                            (timeOfDay: opening the scenario moves
+		                            the clock to at least this time)
 		condition: ((state) -> boolean)?
 		                            optional; scenario is unavailable when it
 		                            returns false (used for branching)
@@ -35,6 +42,10 @@
 		feedback: string            educational, nonjudgmental
 		setFlags: { [string]: any }?     optional; stored on the session so
 		                                 later scenarios can react to it
+		npcReaction: string?        the speaker's animation while the
+		                            feedback is shown ("nod", "wave", ...)
+		npcLine: string?            the speaker's reply once the feedback
+		                            panel closes
 
 	When a choice is made, the controller also sets the flags
 	"completed:<scenarioId>" and "completedAt:<location>", which activities,
@@ -67,6 +78,12 @@ local function validateChoice(choice: any, label: string, seenIds: { [string]: b
 		warn(`[Scenarios] {label} has no effects table.`)
 		return false
 	end
+	for _, field in { "npcReaction", "npcLine" } do
+		if choice[field] ~= nil and type(choice[field]) ~= "string" then
+			warn(`[Scenarios] {label} "{field}" must be a string.`)
+			return false
+		end
+	end
 	return DataLoader.validateEffects(choice.effects, label)
 end
 
@@ -90,6 +107,13 @@ local function validateScenario(scenario: any, source: string): boolean
 	if type(scenario.day) ~= "number" or type(scenario.order) ~= "number" then
 		warn(`[Scenarios] {scenario.id} needs numeric "day" and "order"; skipped.`)
 		return false
+	end
+	for index, line in scenario.introLines or {} do
+		local text = if type(line) == "table" then line.text else line
+		if type(text) ~= "string" then
+			warn(`[Scenarios] {scenario.id} intro line #{index} needs text; skipped.`)
+			return false
+		end
 	end
 	if scenario.condition ~= nil and type(scenario.condition) ~= "function" then
 		warn(`[Scenarios] {scenario.id} "condition" must be a function; skipped.`)

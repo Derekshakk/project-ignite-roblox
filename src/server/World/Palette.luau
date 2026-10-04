@@ -35,6 +35,11 @@ Palette.Materials = table.freeze({
 	Matte = Enum.Material.SmoothPlastic,
 	Glass = Enum.Material.Glass,
 	Neon = Enum.Material.Neon,
+	Concrete = Enum.Material.Concrete,
+	Brick = Enum.Material.Brick,
+	Slate = Enum.Material.Slate,
+	Grass = Enum.Material.Grass,
+	Ground = Enum.Material.Ground,
 })
 
 local rgb = Color3.fromRGB

@@ -6,15 +6,23 @@
 	module only routes them. Whether a prompt is available, and what it says,
 	comes from the controller, so prompts disable themselves while a dialog
 	is open, after a scenario is done, or before an activity is unlocked.
+	On top of that, every prompt is disabled whenever UIState is not Idle
+	(an NPC is talking, a panel is open, a task is running) and comes back
+	when the interaction ends.
 
 	Routing:
 		Scenario, Activity, Inspect, EndDay → controller:interact
+		Activity with a `guided` task → GuidedTask (a short physical
+		           action; the activity is performed when it finishes)
+		Door     → Doors.toggle (prompt reads "Open Door"/"Close Door")
+		Signal   → Crosswalks.request (walk-signal buttons)
 		Travel   → fade, server moves the character, controller:arriveAt
 		Pickup   → Inventory:collect (server grants the Tool first)
 		Sit      → server seats the character; if the prompt has a
 		           ScenarioLocation with an available scenario, it starts
-	A single busy flag blocks new interactions while a server request is in
-	flight, so prompts can't be triggered twice by accident.
+	Double triggers are blocked three ways: a busy flag while a server
+	request is in flight, a short global cooldown between triggers, and the
+	triggered prompt being disabled immediately until state is refreshed.
 
 	Enabling/disabling happens locally, so each player sees their own
 	progress.
@@ -26,10 +34,18 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local World = require(ReplicatedStorage:WaitForChild("Shared").Constants.World)
 local ServerRequests = require(script.Parent.ServerRequests)
+local Doors = require(script.Parent.Doors)
+local GuidedTask = require(script.Parent.GuidedTask)
+local PlayerControl = require(script.Parent.PlayerControl)
 
 local Tags = World.Tags
 local Attributes = World.Attributes
 local InteractionType = World.InteractionTypes
+
+-- Minimum time between two triggers (any prompts).
+local TRIGGER_COOLDOWN = 0.45
+-- Let a door start swinging before the screen fades.
+local DOOR_LEAD_SECONDS = 0.25
 
 local localPlayer = Players.LocalPlayer
 
@@ -41,6 +57,10 @@ InteractionController.__index = InteractionController
 		inventory     Inventory (client)
 		feedback      InteractionFeedback
 		transitions   Transitions (fades)
+		uiState       UIState
+		tasks         GuidedTask
+		crosswalks    Crosswalks
+		notify        (notification) -> () for short messages
 ]]
 function InteractionController.new(controller, services)
 	return setmetatable({
@@ -48,8 +68,13 @@ function InteractionController.new(controller, services)
 		_inventory = services.inventory,
 		_feedback = services.feedback,
 		_transitions = services.transitions,
+		_uiState = services.uiState,
+		_tasks = services.tasks,
+		_crosswalks = services.crosswalks,
+		_notify = services.notify,
 		_bindings = {} :: { [ProximityPrompt]: { connection: RBXScriptConnection, defaultActionText: string } },
 		_busy = false,
+		_lastTrigger = 0,
 	}, InteractionController)
 end
 
@@ -69,6 +94,8 @@ function InteractionController:start()
 	end
 	self._controller.Changed:Connect(refresh)
 	self._controller.StateChanged:Connect(refresh)
+	self._uiState.Changed:Connect(refresh)
+	Doors.Changed:Connect(refresh)
 
 	-- Sit prompts hide while you're sitting in that seat.
 	local function onCharacter(character: Model)
@@ -123,6 +150,12 @@ function InteractionController:_describe(prompt: ProximityPrompt)
 	local interactionType = prompt:GetAttribute(Attributes.InteractionType)
 	local interactionId = prompt:GetAttribute(Attributes.InteractionId)
 	local info = self._controller:getInteraction(interactionType, interactionId)
+	if interactionType == InteractionType.Door then
+		local leaf = prompt.Parent
+		if leaf and leaf:IsA("BasePart") then
+			info.actionText = if Doors.isLocked(leaf) then "Try Door" elseif Doors.isOpen(leaf) then "Close Door" else "Open Door"
+		end
+	end
 	if interactionType == InteractionType.Sit then
 		if currentSeat() == prompt.Parent then
 			info.available = false
@@ -135,6 +168,15 @@ function InteractionController:_describe(prompt: ProximityPrompt)
 				info.actionText = scenario.actionText
 			end
 		end
+		-- A seat can host a short recovery task; once done it's just a seat.
+		local seat = prompt.Parent
+		local activityId = seat and seat:GetAttribute(Attributes.RecoveryActivity)
+		if info.available and type(activityId) == "string" then
+			local activity = self._controller:getInteraction(InteractionType.Activity, activityId)
+			if not activity.available then
+				info.actionText = "Sit"
+			end
+		end
 	end
 	return info
 end
@@ -145,7 +187,7 @@ function InteractionController:_refresh(prompt: ProximityPrompt)
 		return
 	end
 	local info = self:_describe(prompt)
-	prompt.Enabled = info.available and not self._busy
+	prompt.Enabled = info.available and not self._busy and self._uiState:isIdle()
 	prompt.ActionText = info.actionText or binding.defaultActionText
 end
 
@@ -188,42 +230,78 @@ function InteractionController:_onTriggered(prompt: ProximityPrompt)
 	if type(interactionType) ~= "string" or type(interactionId) ~= "string" then
 		return
 	end
-	-- Re-check availability: the prompt may have been triggered in the same
-	-- frame something else changed.
-	if self._busy or not self:_describe(prompt).available then
+	-- Re-check everything: the prompt may have been triggered in the same
+	-- frame something else changed, or pressed again before it hid.
+	local now = os.clock()
+	if self._busy or not self._uiState:isIdle() or now - self._lastTrigger < TRIGGER_COOLDOWN then
 		return
 	end
+	if not self:_describe(prompt).available then
+		return
+	end
+	self._lastTrigger = now
+	-- Hide this prompt right away; the refresh below (or the state change
+	-- the interaction causes) brings it back if it's still available.
+	prompt.Enabled = false
+	task.delay(TRIGGER_COOLDOWN, function()
+		self:_refresh(prompt)
+	end)
 	local controller = self._controller
 
-	if interactionType == InteractionType.Travel then
+	if interactionType == InteractionType.Door then
+		local leaf = prompt.Parent
+		if leaf and leaf:IsA("BasePart") and Doors.toggle(leaf) == "locked" then
+			local message = leaf:GetAttribute(World.Attributes.LockedMessage)
+			self._notify({ title = prompt.ObjectText, message = if type(message) == "string" then message else "It's locked." })
+		end
+	elseif interactionType == InteractionType.Signal then
+		self._feedback:cue("use")
+		self._crosswalks:request(interactionId)
+	elseif interactionType == InteractionType.Activity and GuidedTask.isGuided(interactionId) then
+		-- Walking away from where the task started stops it.
+		local part = prompt.Parent
+		local anchor = PlayerControl.getRootPosition() or (if part and part:IsA("BasePart") then part.Position else nil)
+		if anchor and self._tasks:begin(interactionId, anchor) then
+			self._feedback:play(prompt)
+		end
+	elseif interactionType == InteractionType.Travel then
 		self._feedback:play(prompt)
+		if prompt:FindFirstChild("AnimatedDoor") then
+			task.wait(DOOR_LEAD_SECONDS)
+		end
 		local areaId = self:_travel(interactionId)
 		if areaId then
 			controller:arriveAt(areaId)
 		end
 	elseif interactionType == InteractionType.Pickup then
+		-- Snapshot the item before it hides, so it can animate away.
+		local ghost = self._feedback:snapshot(prompt)
 		local collected = self:_withBusy(function()
 			return self._inventory:collect(interactionId)
 		end)
 		if collected then
-			self._feedback:play(prompt)
-			local part = prompt.Parent
-			if part and part:IsA("BasePart") then
-				self._feedback:sparkle(part.Position)
-			end
+			self._feedback:play(prompt, ghost)
+		elseif ghost then
+			ghost:Destroy()
 		end
 	elseif interactionType == InteractionType.Sit then
 		local seated = self:_withBusy(function()
 			return ServerRequests.sit(interactionId)
 		end)
 		if seated then
+			self._feedback:cue("use")
 			local location = prompt:GetAttribute(Attributes.ScenarioLocation)
 			if type(location) == "string" and controller:getInteraction(InteractionType.Scenario, location).available then
 				controller:startScenarioAt(location)
 			end
 		end
-	elseif controller:interact(interactionType, interactionId) then
-		self._feedback:play(prompt)
+	else
+		local ghost = self._feedback:snapshot(prompt)
+		if controller:interact(interactionType, interactionId) then
+			self._feedback:play(prompt, ghost)
+		elseif ghost then
+			ghost:Destroy()
+		end
 	end
 end
 

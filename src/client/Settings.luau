@@ -19,7 +19,8 @@ Settings.Definitions = table.freeze({
 	{ key = "highlights", label = "Object highlights", description = "Outline on things you can use" },
 	{ key = "objectiveMarker", label = "Objective marker", description = "Marker over your next goal" },
 	{ key = "environmentAudio", label = "Environment sounds", description = "Room and crowd ambience" },
-	{ key = "captions", label = "Captions", description = "Subtitles for spoken lines" },
+	{ key = "captions", label = "Captions", description = "Subtitles when the speaker is off-screen" },
+	{ key = "backgroundLife", label = "Background life", description = "Traffic, passers-by and swaying trees" },
 })
 
 local values = {
@@ -28,6 +29,7 @@ local values = {
 	objectiveMarker = true,
 	environmentAudio = true,
 	captions = true,
+	backgroundLife = true,
 }
 
 function Settings.get(key: string): boolean

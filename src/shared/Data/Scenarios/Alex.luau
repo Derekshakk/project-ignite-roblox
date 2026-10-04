@@ -95,8 +95,10 @@ return {
 		leadInSeconds = 5,
 		introLines = {
 			"Good morning! Quick change of plans before we start.",
-			"You'll be doing a group project, due Friday. Find a group of three, starting now!",
+			{ text = "You'll be doing a group project, due Friday. Find a group of three, starting now!", reaction = "point" },
 		},
+		-- While the choices are open, the class turns to each other and talks.
+		crowdReaction = "chat",
 
 		title = "The Surprise Group Project",
 		timeOfDay = "8:15 AM",
@@ -118,6 +120,8 @@ return {
 					burnout = 8,
 					focus = -5,
 				},
+				npcReaction = "nod",
+				npcLine = "Thanks for jumping in, Alex.",
 				feedback = "Taking the lead gave Alex a sense of control and a small boost in motivation. "
 					.. "It also meant organising other people in a loud room while still unsure of the "
 					.. "instructions, which used up a lot of energy early in the day. Leading can be a real "
@@ -133,6 +137,8 @@ return {
 					focus = 10,
 					energy = -5,
 				},
+				npcReaction = "nod",
+				npcLine = "Of course. I'll put the steps up on the board.",
 				feedback = "Asking for written instructions took some courage and a little energy, but it "
 					.. "gave Alex something steady to come back to. Requesting information in a format that "
 					.. "works for you is a form of self-advocacy, and it often makes the rest of a task "
@@ -163,10 +169,81 @@ return {
 					lifeSatisfaction = 3,
 					motivation = -2,
 				},
+				npcReaction = "nod",
+				npcLine = "Sure. Come back whenever you're ready.",
 				feedback = "A few quiet minutes helped Alex's nervous system settle, and they came back "
 					.. "with a little more energy and focus. Missing part of the group discussion meant "
 					.. "catching up afterwards. Recovery breaks are a valid tool, and noticing when you "
 					.. "need one is a skill.",
+			},
+		},
+	},
+	{
+		-- Optional: not part of the day's objectives.
+		id = "alex_d1_hallway_sam",
+		characterId = "alex",
+		day = 1,
+		order = 1,
+		location = "hallway_friend",
+		promptText = "Talk to Sam",
+		speaker = "sam",
+		introLines = {
+			"Hey! I was hoping I'd catch you before class.",
+			"Did you finish the reading? I only got halfway. Want to talk about it?",
+		},
+
+		title = "A Friend by the Lockers",
+		timeOfDay = "7:55 AM",
+		situation = "Sam waves from beside the lockers. The hallway is filling up and first period "
+			.. "starts in a few minutes. Sam clearly wants to talk.",
+		innerThoughts = "I like Sam. I've just already used a lot of words this morning, and it's getting loud.",
+
+		choices = {
+			{
+				id = "chat",
+				text = "Stop and chat for a few minutes",
+				description = "Catch up with Sam before class.",
+				effects = {
+					lifeSatisfaction = 5,
+					motivation = 3,
+					energy = -4,
+					stress = 2,
+				},
+				npcReaction = "nod",
+				npcLine = "Okay, see you in there!",
+				feedback = "Talking with a friend gave Alex a real lift: more connected, a bit more ready "
+					.. "for the day. Holding a conversation in a loud hallway also takes energy, especially "
+					.. "with so much noise to filter out. Both things can be true at once.",
+			},
+			{
+				id = "quieter",
+				text = "Ask to talk somewhere quieter",
+				description = "Suggest stepping out of the busiest part of the hallway.",
+				effects = {
+					selfAdvocacy = 6,
+					lifeSatisfaction = 3,
+					energy = -2,
+					stress = -2,
+				},
+				npcReaction = "nod",
+				npcLine = "Good idea. It's so loud out here today.",
+				feedback = "Asking for a quieter spot let Alex enjoy the conversation without competing with "
+					.. "the noise. Naming what you need, even casually with a friend, is self-advocacy, "
+					.. "and friends often appreciate knowing.",
+			},
+			{
+				id = "later",
+				text = "Wave and say you'll catch up at lunch",
+				description = "Keep moving and save the conversation for later.",
+				effects = {
+					energy = 2,
+					lifeSatisfaction = -1,
+				},
+				npcReaction = "wave",
+				npcLine = "Sure, see you at lunch!",
+				feedback = "Saving the conversation for later kept some energy in reserve for class, and Alex "
+					.. "missed a little connection this morning. Choosing when to be social is one way of "
+					.. "managing capacity. It doesn't mean Alex cares any less.",
 			},
 		},
 	},

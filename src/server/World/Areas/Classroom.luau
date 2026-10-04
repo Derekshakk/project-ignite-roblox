@@ -11,9 +11,13 @@
 		a spare chair         → Sit "classroom_chair_back"
 		calm corner beanbag   → Activity "calm_corner_rest" (recovery)
 		schedule by the board → Inspect "classroom_schedule"
+		card by the beanbag   → Inspect "classroom_calm_card"
+		your notebook         → Activity "write_question" (after class starts)
+		question tray on the teacher's desk → Activity "leave_note"
 	Sitting in either chair makes the teacher talk to the player.
 ]]
 
+local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local World = require(ReplicatedStorage:WaitForChild("Shared").Constants.World)
@@ -36,14 +40,16 @@ local DESK_HEIGHT = 2.8
 local DESK_COLUMNS = { -5, 0.5, 6 }
 local DESK_ROWS = { -8, 0, 8 }
 local PLAYER_DESK = Vector2.new(0.5, 0)
--- Desks with a student standing at them; the rest get an empty chair.
+-- Desks with a student standing at them; the rest get an empty chair. Some
+-- students whisper now and then (client AmbientChatter), and each is turned
+-- a little differently so the class doesn't face the board in lockstep.
 local OCCUPIED = {
-	["-5,-8"] = true,
-	["-5,8"] = true,
-	["0.5,-8"] = true,
-	["0.5,8"] = true,
-	["6,-8"] = true,
-	["6,0"] = true,
+	["-5,-8"] = { chatter = { "Did you do the reading?", "Is this on the quiz?" } },
+	["-5,8"] = {},
+	["0.5,-8"] = { chatter = { "I forgot my pencil case.", "Can I borrow one?" } },
+	["0.5,8"] = { chatter = { "I'm so tired today." } },
+	["6,-8"] = {},
+	["6,0"] = { chatter = { "What page are we on?" } },
 }
 
 local Classroom = {}
@@ -59,6 +65,16 @@ local function buildCalmCorner(room: Instance, origin: CFrame)
 	Builder.part(corner, "Cushion", at(origin, -11.0, 0.4, -10.4), Vector3.new(1.6, 0.6, 1.6), C.Accent:Lerp(C.Paper, 0.3), {
 		Material = M.Fabric,
 	})
+	-- A small card on a stand next to the beanbag.
+	local card = Builder.part(corner, "CalmCard", at(origin, -10.9, 0.75, -13.7) * CFrame.Angles(math.rad(-15), math.rad(30), 0), Vector3.new(1.1, 0.8, 0.06), C.Paper, {
+		CanCollide = false,
+	})
+	Builder.detail(corner, "CardStand", at(origin, -10.9, 0.2, -13.65), Vector3.new(0.5, 0.4, 0.3), C.DarkWood)
+	Builder.prompt(card, InteractionType.Inspect, "classroom_calm_card", {
+		ActionText = "Read",
+		ObjectText = "Card",
+		MaxActivationDistance = 7,
+	}):SetAttribute(World.Attributes.Feedback, "lift")
 	Props.bookshelf(corner, facing(origin, -15.4, 0, -9.2, Vector3.xAxis), 3, 3.2, 1.1, 2, 31)
 	Builder.detail(corner, "Headphones", at(origin, -15.3, 3.4, -9.2), Vector3.new(0.8, 0.3, 1), C.Charcoal)
 	Props.floorLamp(corner, at(origin, -9.6, 0, -14.2))
@@ -105,6 +121,16 @@ function Classroom.build(parent: Instance, origin: CFrame, context)
 	Props.papers(furniture, at(origin, 10.8, 3.1, -1.4), 3, 5)
 	Props.bookStack(furniture, at(origin, 11.2, 3.1, 1.9), 3, 2)
 	Builder.cylinder(furniture, "Mug", at(origin, 10.6, 3.4, 0.6), 0.5, 0.4, C.Accent)
+	-- Question tray: leave a written question here (it appears in the tray).
+	local tray = Builder.part(furniture, "QuestionTray", at(origin, 10.5, 3.25, -2.45), Vector3.new(1.3, 0.25, 1.0), C.Blue, { CanCollide = false })
+	Builder.sign(furniture, "TraySign", facing(origin, 9.85, 3.65, -2.45, -Vector3.xAxis), Vector3.new(1.2, 0.4, 0.05), "Questions?", C.Paper)
+	local trayPrompt = Builder.activityPrompt(tray, "leave_note")
+	if trayPrompt then
+		trayPrompt.MaxActivationDistance = 7
+	end
+	local note = Builder.detail(furniture, "LeftNote", at(origin, 10.5, 3.39, -2.45) * CFrame.Angles(0, math.rad(12), 0), Vector3.new(0.7, 0.03, 0.7), C.Yellow)
+	note:SetAttribute(World.Attributes.ShowWhenFlag, "noteLeft")
+	CollectionService:AddTag(note, World.Tags.FlagVisibility)
 	Npc.spawn(people, "Teacher", facing(origin, 13.5, 0, -1, -Vector3.xAxis), {
 		seed = 40,
 		shirt = Color3.fromRGB(110, 78, 130),
@@ -138,7 +164,14 @@ function Classroom.build(parent: Instance, origin: CFrame, context)
 			local isPlayerDesk = x == PLAYER_DESK.X and z == PLAYER_DESK.Y
 			local surface = at(origin, x, DESK_HEIGHT, z)
 			if isPlayerDesk then
-				Builder.detail(furniture, "Notebook", surface * CFrame.new(0, 0.06, 0.3), Vector3.new(1, 0.12, 1.4), C.Accent)
+				local notebook = Builder.part(furniture, "Notebook", surface * CFrame.new(0, 0.06, 0.3), Vector3.new(1, 0.12, 1.4), C.Accent, {
+					CanCollide = false,
+				})
+				local notePrompt = Builder.activityPrompt(notebook, "write_question")
+				if notePrompt then
+					notePrompt.MaxActivationDistance = 6
+					notePrompt:SetAttribute(World.Attributes.Feedback, "lift")
+				end
 				Builder.cylinder(furniture, "PencilCup", surface * CFrame.new(0.4, 0.3, -0.8), 0.6, 0.4, C.Teal)
 				local _, seat = Props.chair(furniture, seatCFrame, C.Blue, {
 					context = context,
@@ -153,7 +186,12 @@ function Classroom.build(parent: Instance, origin: CFrame, context)
 				prompt:SetAttribute(World.Attributes.ScenarioLocation, "classroom_seat")
 			elseif OCCUPIED[`{x},{z}`] then
 				seed += 1
-				Npc.spawn(people, `Student{seed}`, seatCFrame, { seed = seed })
+				Npc.spawn(people, `Student{seed}`, seatCFrame, {
+					seed = seed,
+					chatter = OCCUPIED[`{x},{z}`].chatter,
+					talkative = false,
+					turnRange = 28,
+				})
 				Props.papers(furniture, surface, 1 + seed % 2, seed)
 			elseif x == -5 and z == 0 then
 				-- A spare seat: sit and listen to the teacher.
@@ -192,7 +230,8 @@ function Classroom.build(parent: Instance, origin: CFrame, context)
 		Shape = Enum.PartType.Ball,
 	})
 
-	Builder.areaVolume(room, "classroom", at(origin, 0, HEIGHT / 2, 0), Vector3.new(WIDTH, HEIGHT, DEPTH))
+	-- Reaches into the doorway so there's no gap between areas.
+	Builder.areaVolume(room, "classroom", at(origin, -1, HEIGHT / 2, 0), Vector3.new(WIDTH + 2, HEIGHT, DEPTH))
 
 	for _, x in { -8, 8 } do
 		for _, z in { -7, 7 } do

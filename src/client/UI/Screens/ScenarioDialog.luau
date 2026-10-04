@@ -21,7 +21,7 @@ function ScenarioDialog.render(parent: Instance, ctx, view, actions): Instance
 	local dialog = Components.dialog(parent, ctx, "ScenarioDialog")
 
 	local header = Components.stack(dialog, ctx, { name = "Header", gap = 2 })
-	Components.text(header, ctx, `{scenario.timeOfDay}  ·  {string.upper(character.name)}`, {
+	Components.text(header, ctx, `{view.timeText or scenario.timeOfDay}  ·  {string.upper(character.name)}`, {
 		size = "Caption",
 		font = "Bold",
 		color = Colors.Accent,

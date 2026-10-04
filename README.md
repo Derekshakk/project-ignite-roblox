@@ -29,20 +29,75 @@ src/shared   -> ReplicatedStorage.Shared   (data, state, game flow — no UI, no
   Data/Areas, Npcs, Inspectables   area titles + ambience, named NPCs, lookable details
   State/GameState          meters, choices, events, counters, flags, inventory
   Game/GameController      phases: CharacterSelect → Exploring ⇄ Scenario/Feedback → Results
+  Game/Clock, Conditions   in-game time ("8:15 AM" ⇄ minutes); data conditions incl. before/after
 src/server   -> ServerScriptService.Server
-  World/                   WorldBuilder, Areas/*, Builder, Props, Palette, ItemModels, Npc, LightingSetup
-  TravelService, SeatService, ItemService (Tools in the Backpack), Remotes
+  World/                   WorldBuilder, Areas/* (Bedroom, Home, Neighborhood, Hallway, Classroom,
+                           SchoolExterior), Builder (incl. door/cladding/waypoint/gable roof),
+                           Props, OutdoorProps, Houses (ranch/colonial/cottage), Vehicles (car
+                           styles), HeldProps, Palette, ItemModels, Npc, AmbientTemplates,
+                           LightingSetup
+  TravelService, SeatService, ItemService (Tools in the Backpack), SafetyService (fall
+  recovery), Remotes
 src/client   -> StarterPlayerScripts.Client
   Settings                 comfort/accessibility toggles (press P in game)
-  World/                   interactions, inventory, zones, areas, NPC animation, scenes,
-                           doors, audio, movement feedback, objective marker
+  UIState                  which major interaction is on screen (one at a time):
+                           Idle → Speaking → Choice → Feedback, or Task
+  World/                   interactions, inventory, zones, areas, Doors (every door),
+                           Crosswalks, TimeOfDay (sky), GuidedTask (breathing,
+                           stretching, waiting), audio, movement feedback, objective
+                           marker (single targets or routes), flag visibility,
+                           NPCs (NpcRegistry, NpcAnimator, NpcSpeech, AmbientChatter,
+                           SceneDirector), Ambient/ (AmbientLife: Traffic, Pedestrians,
+                           WorldMotion, AmbientAudio, Paths)
   UI/                      HUD, dialogs, menus, captions, transitions
 ```
+
+Interactions and NPC scenes all go through `UIState`: prompts are disabled unless it
+is Idle, NPC lines finish (and their bubble fades) before a choice panel opens, and
+death/respawn/restart cancel the active session so nothing is left on screen.
+The world is one continuous map: bedroom → front hall → Maple Street (or the quieter
+Elm Park path) → School Road → Westbrook High. There is no baseplate; the
+Neighborhood builder lays ground only under the playable map, with an invisible
+boundary and server-side fall recovery. In-game time starts at the day plan's
+`startTime` and moves forward with scenarios (`timeOfDay`), activities (`minutes`),
+zones (`entryMinutes`) and area arrivals (`Data/Areas` `arrivals`); the HUD clock and
+the sky follow it.
+
+NPC behaviour is data-driven too: `Data/Npcs` (names, greetings, lecture lines),
+scenario `introLines` (with optional `reaction`), `crowdReaction`, and per-choice
+`npcReaction` / `npcLine`.
 
 Adding content is mostly data: a character needs `Characters/<Name>.luau`,
 `Scenarios/<Name>.luau` and `DayPlans/<Name>.luau`. Scenarios appear at any world
 interaction point whose location id matches their `location`. A new item needs an
 entry in `Data/Items`, a model in `server/World/ItemModels`, and a Pickup prompt.
 
+Animation ids in `client/World/NpcAnimator` are Roblox's default R15 idle and wave
+(placeholders for custom animations); everything else is procedural. Interaction sound
+cues in `client/World/InteractionFeedback`, door sounds in `client/World/Doors` and the
+walk-signal chirp in `client/World/Crosswalks` use sounds bundled with the Roblox client
+(placeholders).
+
+## Ambient life
+
+Background traffic, passers-by and small world motion are purely visual and local to
+each client (no network traffic, no gameplay effect):
+
+- `Data/Ambient.luau` holds the traffic lanes, pedestrian routes (points or named
+  markers such as `lot134_step`), crosswalks, limits and sound slots.
+- The server builds templates into `ReplicatedStorage.IgniteAmbient`
+  (`server/World/AmbientTemplates`): R15 rigs, one car per body style, dogs, a grocery bag,
+  and route markers. The client clones and pools them (`client/World/Ambient`).
+- Cars stop for a "walk" signal, for anyone in or waiting at an unsignalled crosswalk, and
+  for anyone in their lane; they appear and disappear off-map, out of sight.
+- Walkers wait at curbs, pause at points of interest, step around the player and use the
+  default R15 walk/idle (placeholders) synced to their speed, with a procedural fallback.
+- Neighbours with an `activity` (watering, sweeping, gardening, sitting, phone) are normal
+  NPCs animated by `NpcAnimator`; they stop to greet or talk as before.
+- Trees, the sprinkler, garden gates, the school flag and a dog's tail are tagged
+  `IgniteAmbientMotion` and animated by `WorldMotion`.
+- Settings → "Background life" turns all of it off.
+
 Ambient audio ids are placeholders: add Creator Store audio ids in `Data/Areas.luau`
-and `Data/Zones/School.luau` (`ambientSound`).
+and `Data/Zones/School.luau` (`ambientSound`), and car engine, birds and murmur ids in
+`Data/Ambient.luau` (`sounds`; road noise, wind and footsteps use bundled stand-ins).

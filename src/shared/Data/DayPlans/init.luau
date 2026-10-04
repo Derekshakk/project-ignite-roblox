@@ -11,12 +11,15 @@
 		day: number
 		startArea: string              area id (e.g. "bedroom")
 		startDestination: string       destination id the player is moved to
+		startTime: string?             in-game time the day starts ("7:05 AM")
 		objectives: { { id: string, text: string, completeWhen: Condition } }
 		finalObjectiveText: string     shown once every objective is complete;
 		                               the day can then be ended
 		Objectives (and `finalMarker`) may have a `marker`: per-area targets
 		for the objective indicator, as "InteractionType:InteractionId",
-		e.g. { default = "Sit:classroom_player_chair", bedroom = "Travel:…" }.
+		e.g. { default = "Sit:classroom_player_chair", bedroom = "Door:…" }.
+		A target can also be a list followed in order (a route), and
+		"Waypoint:<id>" names a route point placed in the world.
 ]]
 
 local DataLoader = require(script.Parent.Parent.Util.DataLoader)
@@ -38,6 +41,10 @@ local function validate(plan: any, source: string): boolean
 			warn(`[DayPlans] {plan.characterId} day {plan.day} is missing "{field}"; skipped.`)
 			return false
 		end
+	end
+	if plan.startTime ~= nil and type(plan.startTime) ~= "string" then
+		warn(`[DayPlans] {plan.characterId} day {plan.day} "startTime" must be text like "7:05 AM"; skipped.`)
+		return false
 	end
 	if type(plan.objectives) ~= "table" then
 		warn(`[DayPlans] {plan.characterId} day {plan.day} needs an objectives list; skipped.`)
